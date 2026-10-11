@@ -1,44 +1,36 @@
-#version 450
+#version 110
 
-// A single shared unit quad (0,0)-(1,1) is bound as the vertex buffer for
-// every UI draw call (solid rects and per-glyph text quads alike); the
-// actual position/size/UV-rect come from push constants.
-layout(location = 0) in vec2 inUnitPos;
+// OpenGL 2.0 (GLSL 1.10) port of ui.vert. Push constants become plain
+// uniforms; the only varyings are vUV and vUvPerPx - everything the
+// fragment stage needs per-draw (color, corner radius, size, pattern
+// stops, filter mode) arrives as fragment uniforms instead of being
+// routed through the vertex stage, since GL 2.0 fragment shaders take
+// uniforms directly (the Vulkan versions only passed them down as
+// varyings because push constants had to go through the vertex stage to
+// reach the fragment stage... actually they didn't, but the layout was
+// shared - here we just don't declare the unused ones).
+//
+// vUvPerPx replaces fwidth(): GLSL 1.10 has no derivative functions, but
+// for this axis-aligned unit quad the screen-space UV derivative is a
+// constant, computed exactly here: uv span over the quad's physical
+// pixel size. Identical value to fwidth(vUV) at every fragment, without
+// the per-triangle derivative computation.
 
-layout(push_constant) uniform PushConstants {
-    vec2 posPx;
-    vec2 sizePx;
-    vec4 uvRect;      // xMin, yMin, xMax, yMax - unused (0,0,1,1) for solid quads
-    vec4 color;
-    vec2 screenSizePx;
-    float cornerRadiusPx;  // read by ui_solid.frag - 0 for a plain rect (screen_filter.frag: see there)
-    float pixelScale;      // physical pixels per logical unit - see PushConstants comment
-    // 5 vec3 gradient stops (tightly packed, 15 floats), only read directly
-    // from the push constant block by screen_pattern.frag (which
-    // redeclares this exact same full struct, field-for-field - a partial
-    // layout(offset=...) redeclaration skipping the earlier fields worked
-    // on desktop but produced garbage/stale data on Quest's mobile GPU
-    // driver, so every stage now declares the complete block) - not
-    // consumed here or passed down as a varying, since a fragment shader
-    // can read push constants without going through the vertex stage. See
-    // UiRenderer::PushConstants.
-    float patternColors[15];
-    float filterMode;      // only read by screen_filter.frag (the screen's Look)
-} pc;
+attribute vec2 inUnitPos;
 
-layout(location = 0) out vec2 vUV;
-layout(location = 1) out vec4 vColor;
-layout(location = 2) out vec2 vSizePx;
-layout(location = 3) out float vCornerRadiusPx;
-layout(location = 4) out float vPixelScale;
+uniform vec2 uPosPx;
+uniform vec2 uSizePx;
+uniform vec4 uUvRect;       // xMin, yMin, xMax, yMax
+uniform vec2 uScreenSizePx; // NDC divisor (logical units - see BeginOffscreenFrame)
+uniform float uPixelScale;  // physical pixels per logical unit
+
+varying vec2 vUV;
+varying vec2 vUvPerPx;
 
 void main() {
-    vec2 posPx = pc.posPx + inUnitPos * pc.sizePx;
-    vec2 ndc = (posPx / pc.screenSizePx) * 2.0 - 1.0;
+    vec2 posPx = uPosPx + inUnitPos * uSizePx;
+    vec2 ndc = (posPx / uScreenSizePx) * 2.0 - 1.0;
     gl_Position = vec4(ndc, 0.0, 1.0);
-    vUV = mix(pc.uvRect.xy, pc.uvRect.zw, inUnitPos);
-    vColor = pc.color;
-    vSizePx = pc.sizePx;
-    vCornerRadiusPx = pc.cornerRadiusPx;
-    vPixelScale = pc.pixelScale;
+    vUV = mix(uUvRect.xy, uUvRect.zw, inUnitPos);
+    vUvPerPx = (uUvRect.zw - uUvRect.xy) / (uSizePx * uPixelScale);
 }

@@ -1,47 +1,36 @@
-#version 450
+#version 110
 
-layout(location = 0) in vec2 vUV;
-layout(location = 1) in vec4 vColor;
-layout(location = 2) in vec2 vSizePx;
-layout(location = 3) in float vCornerRadiusPx;
-layout(location = 4) in float vPixelScale;
-layout(location = 0) out vec4 outColor;
+// Port of ui_solid.frag. Gamma-throughout: the Vulkan original wrote
+// linear into an sRGB target (hardware encode on store), so
+// encode(decode(vColor)) was identity and is dropped - vColor is written
+// as authored. Blending is therefore gamma-space (GL 2.0 backbuffers
+// aren't sRGB); visually equivalent for UI quads.
 
-// Rounded-box SDF (Inigo Quilez's formula) - degenerates to a plain
-// rectangle when vCornerRadiusPx is 0, so this single shader covers both
-// sharp- and rounded-corner quads with no extra pipeline.
+varying vec2 vUV;
+
+uniform vec4 uColor;
+uniform vec2 uSizePx;
+uniform float uCornerRadiusPx; // 0 = plain rect
+uniform float uPixelScale;
+
+// Rounded-box SDF (Inigo Quilez) - degenerates to a plain rectangle when
+// uCornerRadiusPx is 0.
 float RoundedBoxSDF(vec2 centeredPx, vec2 halfSizePx, float radiusPx) {
     vec2 d = abs(centeredPx) - (halfSizePx - vec2(radiusPx));
     return length(max(d, 0.0)) + min(max(d.x, d.y), 0.0) - radiusPx;
 }
 
-// sRGB EOTF - the exact piecewise curve (linear below 0.04045) matters for
-// near-black authored colors. See ui_image.frag's doc comment.
-vec3 SrgbToLinear(vec3 c) {
-    return mix(c / 12.92, pow((c + 0.055) / 1.055, vec3(2.4)), step(0.04045, c));
-}
-
 void main() {
     float shapeAlpha;
-    if (vCornerRadiusPx <= 0.0) {
-        // No rounding - output pixel-perfect, no SDF or edge falloff.
+    if (uCornerRadiusPx <= 0.0) {
         shapeAlpha = 1.0;
     } else {
-        vec2 localPx = vUV * vSizePx;
-        float dist = RoundedBoxSDF(localPx - vSizePx * 0.5, vSizePx * 0.5, vCornerRadiusPx);
-        // ~1 physical pixel antialiased edge falloff - dist is in logical
-        // units, so the band's logical-unit width has to shrink as
-        // vPixelScale grows to stay 1 physical pixel wide (see PushConstants'
-        // pixelScale comment).
-        float aaWidth = 1.0 / vPixelScale;
+        vec2 localPx = vUV * uSizePx;
+        float dist = RoundedBoxSDF(localPx - uSizePx * 0.5, uSizePx * 0.5, uCornerRadiusPx);
+        // ~1 physical pixel AA band - dist is in logical units, so the
+        // band shrinks as uPixelScale grows (see PushConstants' comment).
+        float aaWidth = 1.0 / uPixelScale;
         shapeAlpha = 1.0 - smoothstep(-aaWidth, aaWidth, dist);
     }
-
-    // vColor is authored in gamma (sRGB) space, but this pipeline renders
-    // into an sRGB swapchain format, which makes the hardware apply its own
-    // linear->sRGB encode on store. Pre-decode here so the two conversions
-    // cancel out and the stored value matches what was authored (otherwise
-    // colors wash out/fade - the same double-gamma issue the composition
-    // layer's test image had on the sampling side).
-    outColor = vec4(SrgbToLinear(vColor.rgb), vColor.a * shapeAlpha);
+    gl_FragColor = vec4(uColor.rgb, uColor.a * shapeAlpha);
 }
